@@ -62,7 +62,6 @@ jobs:
         id: upstream
         env:
           REF: ${{ inputs.ref }}
-          SYNC_FORK: ${{ inputs.sync_fork }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"

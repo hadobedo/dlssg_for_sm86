@@ -85,7 +85,8 @@ gh workflow run wine-release.yml -R <you>/dlssg_for_sm86 \
 
 Inputs: `ref` (default `main`), `sync_fork` (merge upstream `main` into this fork, default
 on), `draft` (default on — inspect the artifact before publishing), `force` (release even
-if nothing changed).
+if nothing changed). A draft becomes public with
+`gh release edit wine-<version> --repo <you>/dlssg_for_sm86 --draft=false`.
 
 The workflow then:
 
