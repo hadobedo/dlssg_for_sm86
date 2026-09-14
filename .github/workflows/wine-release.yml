@@ -246,7 +246,10 @@ jobs:
 
           args=(--title "$TAG" --notes-file release-notes.md --target "$(git rev-parse HEAD)")
           if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
-          gh release create "$TAG" "dist/$dir.zip" "dist/$dir/SHA256SUMS" "${args[@]}"
+          # --repo is explicit: the `upstream` remote added earlier would
+          # otherwise make gh resolve to the upstream repository.
+          gh release create "$TAG" "dist/$dir.zip" "dist/$dir/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" "${args[@]}"
 
       - name: Record release state
         if: steps.decide.outputs.build == 'true'
