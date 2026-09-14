@@ -1,0 +1,282 @@
+# Builds the Wine/Proton compatibility shim and publishes a release with the
+# upstream runtime. On demand only: nothing is pulled from upstream and no
+# release is cut until this workflow is run. See linux/LINUX.md.
+#
+# Run it: Actions -> "Wine/Proton release" -> Run workflow, or
+#   gh workflow run wine-release.yml -R <owner>/dlssg_for_sm86 -f ref=main
+#
+# One-time setup in a fresh fork:
+#   1. Actions tab -> "I understand my workflows, go ahead and enable them".
+#   2. Settings -> Actions -> General -> Workflow permissions -> "Read and write
+#      permissions" (the workflow pushes the release and may update main).
+#   3. Run it once with "draft" left on, inspect the artifact, then uncheck it.
+name: Wine/Proton release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream ref to build from (branch, tag like 0.3.0, or commit)
+        default: main
+        type: string
+      sync_fork:
+        description: Merge upstream main into this fork's main first
+        type: boolean
+        default: true
+      draft:
+        description: Create the release as a draft (nothing is published)
+        type: boolean
+        default: true
+      force:
+        description: Release even if the upstream payload and shim sources are unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wine-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: sdli1995/dlssg_for_sm86
+  UPSTREAM_URL: https://github.com/sdli1995/dlssg_for_sm86.git
+  # The upstream files that end up in the bundle. A change to these (or to the
+  # shim sources) is what makes a release worth cutting; README-only upstream
+  # commits do not.
+  PAYLOAD_FILES: version.dll dlssg_sm86.ini
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch the upstream ref and extract its payload
+        id: upstream
+        env:
+          REF: ${{ inputs.ref }}
+          SYNC_FORK: ${{ inputs.sync_fork }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Lets README.md win over upstream's, per .gitattributes.
+          git config merge.ours.driver true
+          git remote add upstream "$UPSTREAM_URL"
+
+          git fetch --no-tags upstream "$REF"
+          sha=$(git rev-parse FETCH_HEAD)
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+
+          rm -rf upstream-files
+          mkdir upstream-files
+          read -ra files <<<"$PAYLOAD_FILES"
+          git archive "$sha" "${files[@]}" THIRD_PARTY_NOTICES.txt README.en.md \
+            | tar -x -C upstream-files
+          # Only the files that end up in a bundle count as the payload.
+          payload=$(cd upstream-files && sha256sum "${files[@]}" | sha256sum | cut -d' ' -f1)
+          echo "payload_sha256=$payload" >>"$GITHUB_OUTPUT"
+          echo "payload: $payload" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Sync this fork with upstream main
+        if: inputs.sync_fork
+        run: |
+          set -euo pipefail
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already contains upstream $(git rev-parse --short upstream/main)"
+          else
+            git merge --no-edit upstream/main
+            git push origin main
+          fi
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+          PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          read_state() { jq -r "$1 // empty" linux/state.json 2>/dev/null || true; }
+          prev_payload=$(read_state .payload_sha256)
+          prev_src=$(read_state .shim_source_sha256)
+          prev_version=$(read_state .upstream_version)
+          prev_rev=$(read_state .revision)
+          prev_rev=${prev_rev:-0}
+
+          # Hash of the shim sources, so shim-only changes also produce a release.
+          src=$(sha256sum linux/version_shim.c linux/version_shim.def | sha256sum | cut -d' ' -f1)
+
+          # Upstream's version, from the first line of its English README
+          # ("# DLSSG for SM86 (proxy) - 0.3.0 Version").
+          version=$(head -n1 upstream-files/README.en.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+          if [ -z "$version" ]; then
+            version=$(git describe --tags --abbrev=0 "$UPSTREAM_SHA" | sed 's/^v//')
+          fi
+
+          build=false
+          if [ "$prev_payload" != "$PAYLOAD_SHA" ]; then build=true; fi
+          if [ "$prev_src" != "$src" ]; then build=true; fi
+          if [ "$FORCE" = "true" ]; then build=true; fi
+
+          # Same upstream version -> bump the revision, then skip taken tags
+          # (e.g. a re-run after a partially failed release).
+          if [ "$prev_version" = "$version" ]; then rev=$((prev_rev + 1)); else rev=1; fi
+          if [ "$rev" -lt 1 ]; then rev=1; fi
+          while :; do
+            tag="wine-$version"
+            if [ "$rev" -gt 1 ]; then tag="wine-$version-r$rev"; fi
+            git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 || break
+            rev=$((rev + 1))
+          done
+
+          {
+            echo "build=$build"
+            echo "version=$version"
+            echo "revision=$rev"
+            echo "tag=$tag"
+            echo "shim_source_sha256=$src"
+          } >>"$GITHUB_OUTPUT"
+
+          {
+            echo "### $tag"
+            echo
+            echo "- upstream: \`$UPSTREAM_SHA\` (version $version)"
+            echo "- payload: \`$PAYLOAD_SHA\`"
+            echo "- shim sources: \`$src\`"
+            echo "- building: **$build**"
+            if [ "$build" = "false" ]; then
+              echo
+              echo "Nothing changed since the last release; re-run with \`force\` to rebuild anyway."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Install toolchain
+        if: steps.decide.outputs.build == 'true'
+        run: |
+          sudo apt-get update -qq
+          # `wine` (not just `wine64`) is what ships the /usr/bin launchers that
+          # the smoke test needs; it pulls wine64 in as a dependency.
+          sudo apt-get install -y -qq --no-install-recommends \
+            mingw-w64 wine python3-pefile zip
+
+      - name: Build shim
+        if: steps.decide.outputs.build == 'true'
+        run: ./linux/build.sh
+
+      - name: Check export coverage against the upstream proxy
+        if: steps.decide.outputs.build == 'true'
+        run: python3 linux/verify-exports.py upstream-files/version.dll linux/out/version.dll
+
+      - name: Wine smoke test
+        if: steps.decide.outputs.build == 'true'
+        env:
+          PROXY: upstream-files/version.dll
+        run: ./linux/smoke-test.sh
+
+      - name: Package release bundle
+        if: steps.decide.outputs.build == 'true'
+        id: bundle
+        env:
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          dir="dlssg-sm86-wine-$VERSION"
+          rm -rf dist
+          mkdir -p "dist/$dir/game-dir" "dist/$dir/system32" "dist/$dir/shim-source"
+
+          # Unmodified upstream runtime, then our additions.
+          cp upstream-files/version.dll upstream-files/dlssg_sm86.ini "dist/$dir/game-dir/"
+          cp upstream-files/THIRD_PARTY_NOTICES.txt "dist/$dir/"
+          cp linux/out/version.dll "dist/$dir/system32/version.dll"
+          cp linux/version_shim.c linux/version_shim.def linux/build.sh "dist/$dir/shim-source/"
+          cp linux/install.sh linux/LINUX.md README.md "dist/$dir/"
+          chmod +x "dist/$dir/install.sh" "dist/$dir/shim-source/build.sh"
+
+          # Read/write split: SHA256SUMS is written only after the file list is
+          # captured, so it can never hash itself.
+          ( cd "dist/$dir" && find . -type f ! -name SHA256SUMS -print0 | sort -z \
+              | xargs -0 sha256sum >/tmp/sums )
+          mv /tmp/sums "dist/$dir/SHA256SUMS"
+          ( cd dist && zip -qr "$dir.zip" "$dir" )
+
+          {
+            echo "### bundle"
+            echo
+            echo '```'
+            ( cd "dist/$dir" && find . -type f | sort )
+            echo '```'
+            echo
+            cat "dist/$dir/SHA256SUMS"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Create release
+        if: steps.decide.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
+          SHA: ${{ steps.upstream.outputs.sha }}
+          PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
+          SHIM_SRC: ${{ steps.decide.outputs.shim_source_sha256 }}
+          REF: ${{ inputs.ref }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          dir="dlssg-sm86-wine-$VERSION"
+
+          # linux/release-notes.template.md holds the wording, so the markdown
+          # (and its backticks) never goes through shell quoting.
+          sed -e "s|@UPSTREAM_REPO@|$UPSTREAM_REPO|g" \
+              -e "s|@REF@|$REF|g" \
+              -e "s|@SHA7@|${SHA:0:7}|g" \
+              -e "s|@SHA@|$SHA|g" \
+              -e "s|@VERSION@|$VERSION|g" \
+              -e "s|@PAYLOAD@|$PAYLOAD_SHA|g" \
+              -e "s|@SHIM_SRC@|$SHIM_SRC|g" \
+              linux/release-notes.template.md >release-notes.md
+
+          args=(--title "$TAG" --notes-file release-notes.md --target "$(git rev-parse HEAD)")
+          if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
+          gh release create "$TAG" "dist/$dir.zip" "dist/$dir/SHA256SUMS" "${args[@]}"
+
+      - name: Record release state
+        if: steps.decide.outputs.build == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
+          REF: ${{ inputs.ref }}
+          SHA: ${{ steps.upstream.outputs.sha }}
+          PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
+          REVISION: ${{ steps.decide.outputs.revision }}
+          SRC: ${{ steps.decide.outputs.shim_source_sha256 }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg repo "$UPSTREAM_REPO" \
+            --arg ref "$REF" \
+            --arg sha "$SHA" \
+            --arg version "$VERSION" \
+            --arg payload "$PAYLOAD_SHA" \
+            --arg tag "$TAG" \
+            --arg src "$SRC" \
+            --argjson revision "$REVISION" \
+            --arg shim_sha256 "$(sha256sum linux/out/version.dll | cut -d' ' -f1)" \
+            --arg released_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{upstream_repo: $repo, upstream_ref: $ref, upstream_sha: $sha,
+              upstream_version: $version, payload_sha256: $payload, revision: $revision,
+              tag: $tag, shim_source_sha256: $src, shim_sha256: $shim_sha256,
+              released_at: $released_at}' \
+            >linux/state.json
+          cat linux/state.json
+          git add linux/state.json
+          git commit -m "ci: release $TAG (upstream ${SHA:0:7})"
+          git push origin main

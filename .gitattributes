@@ -1,0 +1,5 @@
+# This fork owns README.md (English) and rewrites the upstream author's Chinese
+# README with it. Without this, every upstream README edit would conflict when
+# the release workflow merges upstream. The driver has to be configured once:
+#   git config merge.ours.driver true
+README.md merge=ours

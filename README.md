@@ -1,141 +1,123 @@
-# DLSSG for SM86（Proxy）- 0.3.0 版本
+# DLSSG-SM86 on Linux (Wine / Proton)
 
-**中文** · [English](README.en.md)
+Frame generation — including multi-frame generation — for RTX 30-series (and RTX 20-series via
+the SM75 route) on **Linux**, delivered as a ready-to-install zip for Wine and Proton.
 
-在 RTX 30 系列（SM86）上启用 NVIDIA DLSS 帧生成（DLSS-G）。Windows x64 / D3D12，运行文件为 `version.dll` 和 `dlssg_sm86.ini`。
+This repository builds on two projects:
 
-## 本次更新说明
+| Project | Contribution |
+|---|---|
+| **[sdli1995/dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86)** | The mod itself: a `version.dll` proxy around the DLSS-G runtime that enables frame generation on Ampere GPUs. All credit for the mod, the runtime and the GPU work goes there. |
+| **[tB0nE/dlssg_for_sm86](https://github.com/tB0nE/dlssg_for_sm86)** | Diagnosed why the proxy cannot start under Wine/Proton and wrote the first forwarding-shim workaround — see [upstream issue #10](https://github.com/sdli1995/dlssg_for_sm86/issues/10). |
 
-- 由 native 模式回退到代理模式。native 化（自建 NGX host）在部分游戏上存在难以修复的兼容问题；本版改用代理 DLL 内嵌未修改的原厂运行库，游戏对 NGX 的调用不变，兼容性更好。
-- 310.9 运行库新增 6X（`MaxGeneratedFrames` 上限由 3 提到 5）。在自身支持 Dynamic MFG 的游戏上，帧生成选「动态 / 自动」时会跑到 6X。
-- 内核最优集（离线基准快约 19~32%）、两档出厂 INI、录制回放与诊断日志等见下文与 `docs/`。
+What this fork adds is packaging and automation: tB0nE's shim, rebuilt and functionally
+verified by CI, plus release zips that combine it with the unmodified upstream runtime and
+INI in one download.
 
-## 下一版本计划
+## The Linux problem, in one paragraph
 
-- 重新评估 Vulkan 支持。
-- 重新评估在仅支持 4X 的游戏上强制 6X。本版已确认该做法逐游戏、依赖游戏侧闭源插件、较脆弱（见「6X 说明」），后续另寻更稳的路径。
-- DLSS L / M 预设的优化：初步测试延迟改善约 1.2 倍，验证后并入。
+Upstream's `version.dll` forwards the real Windows `version.dll` API and its `DllMain`
+refuses to initialize unless every export it forwards resolves on the system DLL. One of
+them, `GetFileVersionInfoByHandle`, exists in no Wine build, so the game dies at startup
+with `status c0000142` (`STATUS_DLL_INIT_FAILED`) before the mod's own log file is even
+created. Changing Proton versions does not help — it is a gap in Wine, not in a Proton
+build. The fix is a ~10 KB shim installed as the prefix's `system32\version.dll`: it
+forwards the 16 exports Wine *does* implement to Wine's real implementation (kept beside it
+as `version_orig.dll`) and adds the missing one as a stub. Full write-up: **[LINUX.md](linux/LINUX.md)**.
 
-## 运行要求
+## Install
 
-- 系统与游戏：Windows 10/11 x64、D3D12。
-- GPU：RTX 30 系列（SM86）。3080 Ti 上完成整套离线基准；3070 上做开发验证。
-- 驱动：带 NGX / NVAPI / CUDA 接口的 NVIDIA 驱动，591.86 与 610.74 实测可用。cubin 需约 R580+ 驱动，更旧的驱动自动回退 PTX（仅首帧多一次 JIT）。
-- 不需要 CUDA Toolkit，不需要 Python。
+Download the newest zip from [Releases](../../releases), then, with the game closed:
 
-两个发布包用法一致，仅内嵌运行库与上限不同；310.9 版在 4X 及以下与 310.1 版一致，另支持 6X。根目录下为310.9最新的dlssg版本，310.1为老版本。
-
-## 不同配置的插帧额外显存参考
-
-帧生成自身的本地显存增量（预热后减去创建特性前，向上取整到 10 MiB，310.9 版、最优内核）。该增量只随输出分辨率变化，与倍率无关：2X 与 6X 占用相同，倍率不额外占用显存。
-
-| 画幅 | 输出分辨率 | 帧生成额外显存 |
-|---|---|---|
-| 16:9 | 720p | 约 230 MiB |
-| 16:9 | 1080p | 约 350 MiB |
-| 16:9 | 1440p | 约 540 MiB |
-| 16:9 | 4K / 3840×2160 | 约 810 MiB |
-| 21:9 | 2560×1080 | 约 440 MiB |
-| 21:9 | 3440×1440 | 约 700 MiB |
-| 21:9 | 5120×2160 | 约 1050 MiB |
-| 32:9 | 3840×1080 | 约 610 MiB |
-| 32:9 | 5120×1440 | 约 990 MiB |
-| 4:3 | 1920×1440 | 约 430 MiB |
-
-同高度不同宽度的占用接近（按输出像素数计）。该值为帧生成自身增量，不含游戏本体与合成输入纹理。
-
-## 安装与升级
-
-1. 完全退出游戏。
-2. 进入游戏的渲染 EXE 目录（如《黑神话：悟空》为 `...\b1\Binaries\Win64\`）。
-3. 将 `version.dll` 与 `dlssg_sm86.ini` 复制进去；该目录已有 `version.dll` 时先备份原文件。少数游戏不加载 `version.dll`，改用发布包 `alternatives\` 目录下的其它代理名（按游戏实际加载的 DLL 选一个，如 `winmm.dll` / `dxgi.dll` / `dbghelp.dll` 等）。
-4. 启动游戏，在图形设置中开启 DLSS 帧生成，选 2X / 3X / 4X（310.9 版且游戏支持时可至 6X）。
-5. 升级：退出游戏后用新版 `version.dll` 覆盖即可，`dlssg_sm86.ini` 一般无需改动。
-6. 卸载：用备份的原 `version.dll` 覆盖回去（或删除），并删除 `dlssg_sm86.ini`。
-
-出厂 `dlssg_sm86.ini` 只保留两个决定性开关：`[FrameGeneration] Optimized`（`1` 用最优内核，输出与原厂逐位一致；`0` 用原厂数值不优化）与 `[FrameGeneration] MaxGeneratedFrames`（`5` 对应 6X、`3` 对应 4X，实际生成帧数由游戏请求、并钳到运行库上限）。其余诊断/兼容项取安全默认、不在出厂文件中，完整清单见 [`docs/INSTALL.md`](docs/INSTALL.md)。
-
-## 杀软误报与签名
-
-本版发布的代理 DLL（`version.dll`、`winmm.dll` 及 `alternatives\` 下各代理）均做代码签名。自签名证书仅验证签名者身份与文件完整性，不提供 Windows 默认信任；首次运行 Windows SmartScreen 仍可能提示「未知发布者」——这是基于信誉的提示，与杀软报毒是两回事。本次使用自签证书 `CN=DLSSG for SM86 (self-signed)`，SHA-1 指纹 `85BA66762F851E49148D706915D09026281418E6`；可在文件属性→数字签名或用 `signtool verify /pa` 核对签名者与指纹。
-
-## 性能（RTX 3080 Ti，离线基准）
-
-RTX 3080 Ti，驱动 591.86，SM86，2026-09-13 实测。单位为每个真实帧对应整组帧生成的 GPU 毫秒数，含共用预处理；4 轮 × 每轮 256 组，取各轮中位数的中位数，同一轮内各配置交错运行以共享温度漂移。下表为 310.9 版、16:9 常见分辨率，原厂内核（`Optimized=0`）与最优内核（`Optimized=1`）的对比。耗时降低统一按 `(原厂 − 最优) / 原厂` 计算，使用未取整数据。
-
-本表衡量的是帧生成的 GPU 计算开销，不等于实测游戏 FPS 增幅；如何据此估算显示帧率见下一节。该次测量之后仅有生命周期与工具类改动（内核缓存与重绑定、录制回放、日志、INI 精简等），最优内核集本身未变动（同一组 63 个变体 + 图像补丁 + 跨内核合并），故以上数字适用于本次发布。
-
-| 分辨率 | 倍率 | 原厂内核 (ms) | 最优内核 (ms) | 耗时降低 |
-|---|---|---|---|---|
-| 720p | 2X | 1.135 | 0.779 | 31.4% |
-| 720p | 3X | 1.766 | 1.307 | 26.0% |
-| 720p | 4X | 2.405 | 1.839 | 23.5% |
-| 720p | 5X | 3.043 | 2.372 | 22.0% |
-| 720p | 6X | 3.680 | 2.907 | 21.0% |
-| 1080p | 2X | 1.389 | 0.949 | 31.7% |
-| 1080p | 3X | 2.011 | 1.482 | 26.3% |
-| 1080p | 4X | 2.641 | 2.021 | 23.5% |
-| 1080p | 5X | 3.269 | 2.563 | 21.6% |
-| 1080p | 6X | 3.888 | 3.099 | 20.3% |
-| 1440p | 2X | 2.143 | 1.491 | 30.4% |
-| 1440p | 3X | 3.156 | 2.324 | 26.4% |
-| 1440p | 4X | 4.163 | 3.160 | 24.1% |
-| 1440p | 5X | 5.206 | 4.008 | 23.0% |
-| 1440p | 6X | 6.197 | 4.849 | 21.8% |
-| 4K | 2X | 2.605 | 1.987 | 23.7% |
-| 4K | 3X | 4.091 | 3.214 | 21.4% |
-| 4K | 4X | 5.577 | 4.442 | 20.4% |
-| 4K | 5X | 7.066 | 5.667 | 19.8% |
-| 4K | 6X | 8.557 | 6.902 | 19.3% |
-
-越低分辨率、越低倍率收益越大（更接近启动/延迟受限）。310.1 版在 2X–4X 与上表接近。21:9 / 32:9 / 4:3 各分辨率及「各 Evaluate 跨度之和」一表见 `docs/evidence/`。3X 及以上单组耗时可能双峰（各实现皆有），中位数或落在两峰之间，原始 min/mean 在数据 JSON 中。
-
-## 插帧后帧率怎么估算
-
-先在相同场景、输出分辨率、DLSS 超分档位与画质设置下关闭帧生成，得到帧率 `F_off`。用 `1000 / F_off` 换算基础帧时间，再从上表按分辨率、倍率与内核配置选整组插帧耗时 `T_FG`（ms）。
-
-```text
-基础帧时间   T_base (ms) = 1000 / F_off
-帧组时间     T_group (ms) ≈ T_base + T_FG
-真实帧/帧组速率 G (组/s)  ≈ 1000 / T_group
-插帧后总帧率 F_out (FPS)  ≈ G × M = 1000 × M / (1000 / F_off + T_FG)
+```bash
+unzip dlssg-sm86-wine-*.zip && cd dlssg-sm86-wine-*
+./install.sh --prefix ~/.steam/steam/steamapps/compatdata/<AppID>/pfx \
+             --game-dir "/path/to/Game/Binaries/Win64"
 ```
 
-`M` 为倍率（2X…6X 对应 2…6）。一组含一个真实帧与 `M − 1` 个生成帧；上表的 `T_FG` 已包含整组生成帧与共用预处理，不能再乘 `M − 1`。开启插帧后的真实帧/帧组速率 `G` 低于关闭插帧的 `F_off`。
+Set the DLL override for that prefix once — `protontricks <AppID> winecfg`, Libraries:
+`version` = `native,builtin` — then launch. A `dlssg_sm86/logs/loader_*.jsonl` beside the
+game executable means the startup abort is gone.
 
-例：关闭帧生成约 **50 FPS**（基础帧时间 20 ms），取上表 **4K 4X** 的 `T_FG`：
+A release bundle contains:
 
-| 内核 | T_FG (ms) | 帧组时间 (ms) | 帧组速率 (组/s) | 估计总帧率 |
-|---|---|---|---|---|
-| 原厂内核 | 5.577 | 25.577 | 39.1 | 156.4 FPS |
-| 最优内核 | 4.442 | 24.442 | 40.9 | 163.7 FPS |
+```
+dlssg-sm86-wine-<version>/
+├─ game-dir/          version.dll (upstream proxy) + dlssg_sm86.ini
+├─ system32/          version.dll (the shim, built from shim-source/)
+├─ shim-source/       version_shim.c, version_shim.def, build.sh
+├─ install.sh         file placement + backup, no wine required
+├─ README.md          this file
+├─ LINUX.md           diagnosis, manual steps, troubleshooting
+└─ THIRD_PARTY_NOTICES.txt
+```
 
-其他分辨率/倍率换用对应行，`F_off` 填该设置下自己实测的值。这是把基础渲染时间与插帧组开销相加的粗略估计；GPU 资源争用、同步、CPU 开销、限帧与刷新率都会影响实际结果，估计值不保证等于计数器读数或实际显示帧率。
+The proxy DLL and INI are upstream's signed, unmodified files. The only thing this fork
+adds to the process is the shim.
 
-## 6X 说明
+**`alternatives/` is not shipped here.** Upstream also publishes `winmm` / `dbghelp` /
+`dinput8` / `dxgi` / `d3d12` proxy variants for games that do not load `version.dll`. All
+five fail under Wine with the same `c0000142` error (measured: each requires exports its
+Wine counterpart does not have), and the shim only covers `version.dll`. If a game does not
+import `version.dll`, none of the other names will work on Linux today — get them from
+upstream if you want to experiment on Windows.
 
-6X（每真实帧生成 5 帧）为 NVIDIA DLSS 4.5 的 Dynamic Multi Frame Generation。310.9 版内嵌的运行库支持该能力，本项目使其能在 Ampere 上运行；是否得到 6X 取决于游戏：
+## Verifying a download
 
-- 游戏自身支持 6X（自带较新的 Streamline 帧生成插件、菜单中可选 6X 或 Dynamic MFG）：装 310.9 版并置 `MaxGeneratedFrames=5` 即可，实测可稳定运行 6X。
-- 游戏仅支持 4X（自带较旧的 4X 插件，当前多数游戏如此）：上限由游戏侧插件决定，本项目无法将其抬到 6X（该插件在初始化时按 4X 铺设内部呈现队列，强行加帧会越界导致帧生成失效或崩溃）。这类游戏请使用 4X。
+Every release ships `SHA256SUMS` next to the zip. The shim itself is verified in CI before
+the release is published: the export set is checked against the upstream proxy and a
+headless Wine run proves that the proxy fails with `err=1114` without the shim and loads
+plus forwards correctly with it.
 
-## 实测反馈
+## Releases and updating from upstream
 
-《黑神话：悟空》、《赛博朋克 2077》与 FH6 实测可正常开启 4X；《Resonance A Plague Tale Legacy》在 310.9 版、帧生成选「动态 / 自动」时默认跑 6X。插帧观感依赖基础帧率：基础帧率偏低时可能出现画面破坏与边缘效应，倍率越高越明显（6X 比 4X 更吃基础帧率），部分游戏即使 4X 也需适当降低画质设置、把基础帧率抬高后才有较好观感；这是帧生成在帧率余量不足时的固有表现，非本项目缺陷。
+Releases are built by [`.github/workflows/wine-release.yml`](.github/workflows/wine-release.yml),
+**on demand only** — nothing is pulled from upstream automatically, and this fork's `main`
+is only updated when you ask for it.
 
-## 诊断与边界
+To pull a new upstream version and cut a release: **Actions → Wine/Proton release → Run
+workflow**, or:
 
-- 日志写入游戏目录 `dlssg_sm86\logs\`（`loader_<PID>.jsonl` / `backend_<PID>.jsonl`）。默认 `[Logging] Level=1` 只记错误，排查时改 `2` 或 `3`。
-- 帧生成未生效时先看 `backend_*.jsonl` 是否有 `install` 且 `route active=true`；缺失多为驱动/运行库不匹配，会记录原因并回退原厂路径。
-- 本版优化的是帧生成的 GPU 计算开销，不能将离线耗时下降当成实测游戏 FPS 增幅；实际帧率增益取决于游戏与瓶颈所在。
-- INI 全部键、日志字段与录制回放见 [`docs/INSTALL.md`](docs/INSTALL.md)、[`docs/CAPTURE.md`](docs/CAPTURE.md)。
+```bash
+gh workflow run wine-release.yml -R <you>/dlssg_for_sm86 \
+   -f ref=main          # upstream branch, tag (e.g. 0.3.0) or commit
+```
 
-## SM75 来源与致谢
+Inputs: `ref` (default `main`), `sync_fork` (merge upstream `main` into this fork, default
+on), `draft` (default on — inspect the artifact before publishing), `force` (release even
+if nothing changed).
 
-- Coldwood1026 的 RTX 20 系列 / SM75 适配（实验性 SM75 路由的内核族来源，见 `THIRD_PARTY_NOTICES.txt`）。
-- NVIDIA 的 DLSS-G 运行库、模型与前后处理（内嵌、未经修改）。
+The workflow then:
 
-## 许可与第三方
+1. fetches the requested upstream ref and extracts `version.dll` + `dlssg_sm86.ini` from it;
+2. builds the shim, verifies its exports and runs the Wine smoke test;
+3. publishes a release tagged `wine-<upstream version>` (e.g. `wine-0.3.0`, or
+   `wine-0.3.0-r2` if the payload or the shim changed without a version bump);
+4. records what it built in [`linux/state.json`](linux/state.json).
 
-- 本项目源码采用 GPLv3。
-- 内嵌的 `nvngx_dlssg.dll`（310.1 SHA 前缀 `c989c0eb…`、310.9.1 SHA 前缀 `ff6e90eb…`）、提取/重编译的内核资源与 `assets/kernels/sm75/` 为 NVIDIA 及上游第三方材料，不随源码转授权，见 `THIRD_PARTY_NOTICES.txt`。
+It skips the build when upstream's payload (`version.dll`, `dlssg_sm86.ini`) and the shim
+sources are byte-identical to the last recorded release, so documentation-only upstream
+commits do not produce release churn.
+
+One-time setup in a fresh fork: enable Actions (Actions tab → "I understand my workflows…")
+and allow write permissions (Settings → Actions → General → Workflow permissions → *Read and
+write*). If you ever sync manually, run `git config merge.ours.driver true` first — it lets
+this README win over upstream's, as declared in [`.gitattributes`](.gitattributes).
+
+## Upstream documentation
+
+The mod's own documentation — supported GPUs, the `dlssg_sm86.ini` keys, VRAM guidance,
+Windows installation, anti-cheat/antivirus notes — lives upstream and applies here
+unchanged: [README.en.md](https://github.com/sdli1995/dlssg_for_sm86/blob/main/README.en.md)
+(English) / [README.md](https://github.com/sdli1995/dlssg_for_sm86/blob/main/README.md)
+(中文, upstream's original; this fork's README.md is the English page you are reading).
+
+## Credits
+
+* **sdli1995** — author of the mod this fork packages. Its GPU assets come from
+  [Coldwood1026's dlssg_for_sm75](https://github.com/Coldwood1026/dlssg_for_sm75); see
+  `THIRD_PARTY_NOTICES.txt`.
+* **tB0nE** — root-caused the Wine/Proton `c0000142` failure and built the original shim;
+  this fork's shim is derived from that work.
+
+Unofficial, community packaging. Nothing here is written or endorsed by the mod's author.
