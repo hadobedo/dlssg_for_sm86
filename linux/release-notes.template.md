@@ -22,11 +22,11 @@ that gets it past Wine's loader.
     ./install.sh --appid <AppID> --game-dir "<rendering EXE folder>"
 
 Add `--no-shim` to skip step 3, or `--prefix <path>` if the prefix is not in a usual Steam
-location. `SHA256SUMS` is uploaded next to the zip rather than inside it.
+location. `SHA256SUMS` is uploaded next to the zip.
 
 The mod is [sdli1995/dlssg_for_sm86](https://github.com/@UPSTREAM_REPO@). tB0nE diagnosed the
 Wine failure in [issue #10](https://github.com/@UPSTREAM_REPO@/issues/10), and the shim comes
 from that work. This release was built by
-[the release workflow](https://github.com/@REPO@/blob/main/.github/workflows/wine-release.yml).
+[the release workflow](https://github.com/@REPO@/blob/main/.github/workflows/proton-release.yml).
 Unofficial packaging, not endorsed by the mod's author. Upstream's
 `THIRD_PARTY_NOTICES.txt` is kept inside `game-dir/` and has the terms for the runtime.

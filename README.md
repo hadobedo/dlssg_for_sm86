@@ -11,13 +11,13 @@ that applies here.
 ## What is in the zip
 
 ```
-dlssg-sm86-wine-<version>/
+dlssg-sm86-proton-<version>/
   game-dir/     version.dll, dlssg_sm86.ini and upstream's notices
   system32/     version.dll, the shim
   install.sh    optional installer
 ```
 
-`SHA256SUMS` is a separate download next to the zip rather than a file inside it.
+`SHA256SUMS` is a separate download next to the zip.
 
 ## Install
 
@@ -27,8 +27,8 @@ Two files named `version.dll` go in two different places, and they do different 
    game's rendering EXE. This is the mod, and it is what enables frame generation.
 2. Copy `system32/version.dll` into the Proton prefix at
    `<prefix>/drive_c/windows/system32/`. Rename the `version.dll` already there to
-   `version_orig.dll` first so you can put it back. The shim is needed for upstream 0.3.0 to
-   0.3.3, and 0.3.4 and later start without it.
+   `version_orig.dll` first so you can put it back. Upstream 0.3.0 to 0.3.3 needs this shim;
+   0.3.4 and later start without it.
 3. In the same prefix, set the DLL override once. Run `protontricks <AppID> winecfg`, open
    Libraries, and set `version` to `native,builtin`.
 4. Start the game. If a `dlssg_sm86/logs/loader_*.jsonl` file appears next to the game EXE,
@@ -57,26 +57,23 @@ does not implement `GetFileVersionInfoByHandle`, so the game exited with `status
 before the mod could write its log.
 
 The shim is about 10 KB. It forwards the 16 exports Wine does have to `version_orig.dll` and
-adds the missing one as a stub that returns FALSE. Upstream changed that check in 0.3.4, so
-from that version on the shim is optional, and either way it does no harm. A headless Wine
-run checks both cases on every release: without the shim the proxy either fails with
-`err=1114` or starts on its own, and with the shim installed it starts and forwards.
+adds the missing one as a stub that returns FALSE. A headless Wine run checks both cases on
+each release: without the shim the proxy either fails with `err=1114` or starts on its own,
+and with the shim installed it starts and forwards.
 
-`alternatives/` is not in the zip. Those are the `winmm`, `dbghelp`, `dinput8`, `dxgi` and
-`d3d12` proxies for games that do not import `version.dll`. They had the same startup problem
-and upstream fixed it in 0.3.4, but nothing here tests them.
+Games that do not import `version.dll` need one of upstream's other proxies: `winmm`,
+`dbghelp`, `dinput8`, `dxgi` or `d3d12`. This fork ships only the `version.dll` shim.
 
 ## Releases
 
-[`.github/workflows/wine-release.yml`](.github/workflows/wine-release.yml) checks upstream
-every six hours and publishes a release when the runtime or the installer changes. You can
-also run it by hand from the Actions tab. There is nothing to do when upstream ships a new
-version: the workflow syncs this repo, builds the shim, runs the checks and uploads the zip.
-If the payload changes without a version bump, the tag gets an `-r2` suffix.
+[`.github/workflows/proton-release.yml`](.github/workflows/proton-release.yml) checks upstream
+every six hours and publishes a release tagged `proton-<upstream version>` when the runtime or
+the installer changes. You can also run it by hand from the Actions tab. When upstream ships
+a new version, the workflow syncs this repo, builds the shim, runs the checks and uploads the
+zip. A rebuild for a version that is already out replaces that release.
 
 [`linux/state.json`](linux/state.json) records the upstream commit, the payload hash and the
-shim hashes from the last release. When those match, the workflow skips the build, so a
-documentation-only change upstream does not produce a release.
+shim hashes from the last release. The workflow skips the build when they match.
 
 ## Building the shim
 
@@ -94,5 +91,4 @@ another copy of the upstream proxy to test a different build.
 
 sdli1995 wrote the mod. tB0nE worked out why it crashed under Wine in
 [issue #10](https://github.com/sdli1995/dlssg_for_sm86/issues/10) and wrote the first shim,
-which the one here is derived from. This is unofficial packaging, and neither author is
-involved in it.
+which the one here is derived from. Unofficial packaging, not endorsed by the mod's author.

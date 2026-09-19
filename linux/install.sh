@@ -137,8 +137,8 @@ fi
 
 cat <<EOF
 
-Next: set the DLL override for this prefix (once). Recent Wine already prefers the
-app-directory proxy, but the override removes any dependence on the build default:
+Next: set the DLL override for this prefix (once), so the app-directory proxy is
+preferred on every Wine and Proton build:
   protontricks <AppID> winecfg    (set Libraries: version = native,builtin)
 
 Then start the game and check <render-exe-dir>/dlssg_sm86/logs/ for a
