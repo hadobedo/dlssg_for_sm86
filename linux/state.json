@@ -1,12 +1,13 @@
 {
   "upstream_repo": "sdli1995/dlssg_for_sm86",
-  "upstream_ref": "main",
-  "upstream_sha": "c7ee998e1872c7ace3060758b5951191ff98b327",
-  "upstream_version": "0.3.0",
-  "payload_sha256": "9eef1d84bebff2763ee64be01372f35b4de378a863a0d38d2a03b55a67122093",
+  "upstream_ref": "0.3.4",
+  "upstream_sha": "196fcb61ef414992a6bef2d237ff609aab09f0d9",
+  "upstream_version": "0.3.4",
+  "payload_sha256": "38dfff5c95c2e9c6b214cfc4aad54f5bfd7f4ee993c2fbc744c2861803dfdeb0",
   "revision": 1,
-  "tag": "wine-0.3.0",
+  "tag": "wine-0.3.4",
   "shim_source_sha256": "a3519296e27c041d7b534ac8bc9231876ca96b181ad55c3d559b0982d5d3215d",
-  "shim_sha256": "4107ff8a7faf5638ec0100f292b3a54e461c98257e052b46bea33151f7ab7be3",
-  "released_at": "2026-09-14T23:23:40Z"
+  "shim_sha256": "d34071e0c1b4b06cf3d2c11ada3e9982821a030cd1f14e2d28ed0caee818e67d",
+  "shim_required": "no",
+  "released_at": "2026-09-19T05:46:51Z"
 }
