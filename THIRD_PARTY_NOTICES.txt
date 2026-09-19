@@ -15,10 +15,16 @@ https://github.com/Coldwood1026/dlssg_for_sm75/commit/c60c2aa363c7e66a523122aa5c
 No CPU host from that binary is embedded. PTX container lengths, termination and
 alignment were repaired, and the PTX ISA declaration of the 33 image kernels was
 normalised from 8.7 to 8.5 (payload text and container field; no instruction
-text changed). Those assets are themselves derivatives of NVIDIA kernel code and
-are third-party material in the same bucket as assets/runtime/nvngx_dlssg.dll:
-they are not relicensed by LICENSE.md. The per-file manifest with every source
-and imported SHA256 is assets/kernels/sm75/index.json.
+text changed). Two families ship: assets/kernels/sm75 carries PTX with one
+further recorded rewrite (the f16x2 .local unpack repair) and cubins this project
+built from it with ptxas, while assets/kernels/sm75/original carries that
+repository's 72 sm_75 cubins byte for byte and its PTX with only the .version
+normalisation, selected by [Compatibility] SM75Family=Original so a Turing owner
+can A/B the repair. Those assets are themselves derivatives of NVIDIA kernel code
+and are third-party material in the same bucket as assets/runtime/nvngx_dlssg.dll:
+they are not relicensed by LICENSE.md. The per-file manifests with every source
+and imported SHA256 are assets/kernels/sm75/index.json and
+assets/kernels/sm75/original/index.json.
 
 DirectX helper header d3dx12.h
 Copyright (c) Microsoft Corporation. All rights reserved.

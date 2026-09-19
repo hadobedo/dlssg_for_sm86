@@ -1,25 +1,45 @@
-# DLSSG for SM86 (proxy) - 0.3.0 Version
+# DLSSG for SM86 (proxy) - 0.3.4 Version
 
 [中文](README.md) · **English**
 
-Enables NVIDIA DLSS Frame Generation (DLSS-G) on RTX 30-series (SM86). Windows x64 / D3D12; the runtime files are `version.dll` and `dlssg_sm86.ini`.
+Enables NVIDIA DLSS Frame Generation (DLSS-G) on RTX 30-series (SM86) and RTX 20-series (SM75). Windows x64 / D3D12; the runtime files are `version.dll` and `dlssg_sm86.ini`.
 
 ## Changes in this release
+
+### 0.3.4
+
+- Fixes the 0.3.3 crash on RTX 30 (GPU driver reset at startup or once DLSS is on; Forza Horizon 6 shows FHC01; issues #535 / #538 / #540 / #542). Cause: with the NVIDIA App DLSS override or an NGX OTA model update active, the DLSS Super Resolution model also received the GPU-architecture rewrite this project makes for Streamline, took a path that does not belong to an RTX 30 and hung the GPU. NVIDIA's own components now always get the real architecture; the rewrite applies to Streamline and the game only. On 0.3.3, just replace `version.dll`.
+
+### 0.3.3
+
+- RTX 20 / 30: the GPU-architecture rewrite shown to the game is now armed at game start and reports RTX 50. Games on Streamline 2.8 (e.g. Final Fantasy VII Rebirth) used to decide "this GPU does not support DLSS-G" during startup and drop the frame-generation plugin (issues #509 / #528); the rewrite is now in place before that check, and the game's 3X / 4X / 6X options unlock as on an RTX 50.
+- `Optimized=1` no longer skips the repeated real-frame copy within a group (`SkipRepeatedRealCopy`; off at every level, set it to `1` yourself if wanted). It had never been validated in a live game, and a flicker report followed on 0.3.2 (issue #532). Level `1` remains bit-identical to the official image.
+
+### 0.3.2
+
+- Part of the inference kernels rewritten (310.9 build): the generated image now matches the official DLSS-G exactly (bit-identical in tests on an RTX 3080 Ti and an RTX 5070; an RTX 2080 Ti's output is bit-identical to the 3080 Ti's), no longer lossy, with a small speed-up (0–8% on the 3080 Ti).
+- Optimization levels reworked: `[FrameGeneration] Optimized` is now `0`–`3`. `0` stock kernels, no acceleration; `1` every acceleration, image bit-identical to the official one (factory default); `2` adds lossy image kernels, faster, about 50 dB PSNR or better against the official image (310.9 build only); `3` everything lossy, fastest. See [`docs/INSTALL.en.md`](docs/INSTALL.en.md).
+
+### 0.3.1
+
+- Fixed frame generation not enabling on RTX 20-series (Turing). RTX 20 now works with the factory `dlssg_sm86.ini` like RTX 30, including 6X (310.9 build, `MaxGeneratedFrames=5`, game plugin permitting).
+- Factory `MaxGeneratedFrames` is now `3` (4X); set `5` for 6X.
+### 0.3.0
 
 - Reverted from the native build to the proxy build. The native approach (a self-built NGX host) had game-compatibility problems that were hard to fix; this build uses a proxy DLL around the unmodified factory runtime, leaving the game's calls to NGX unchanged, which is more compatible.
 - The 310.9 runtime adds 6X (`MaxGeneratedFrames` ceiling raised from 3 to 5). On games that themselves support Dynamic MFG, selecting "Dynamic / Auto" frame generation reaches 6X.
 - Optimized kernel set (~19–32% in the offline benchmark), a two-switch factory INI, capture/replay, and diagnostic logging — see below and `docs/`.
 
-## Roadmap
+## Statement & roadmap
 
-- Re-evaluate Vulkan support.
-- Re-evaluate forcing 6X on games that only support 4X. This release confirmed the approach is per-game, depends on the game's closed-source plugin, and is fragile (see "6X"); a more robust path remains to be found.
-- Optimization of the DLSS L / M presets: preliminary testing shows about a 1.2× latency improvement; to be merged after validation.
+- Kernel-level work on frame generation (DLSS-G) has essentially reached the best this project can do at this stage; kernel optimization is paused, and later releases will carry compatibility and bug fixes only.
+- The next release focuses on INT8 optimization of several Transformer super-resolution models, to raise the base frame rate on RTX 30 / RTX 20.
+- Vulkan support is hard to continue in the project's current state: the wrapper layer itself still has weak game compatibility and little coverage testing, and adding Vulkan on top would only bring more compatibility problems. If you need it, use one of the community patch builds.
 
 ## Requirements
 
 - OS/game: Windows 10/11 x64, D3D12.
-- GPU: RTX 30-series (SM86). The full offline benchmark was run on a 3080 Ti; development validation on a 3070.
+- GPU: RTX 30-series (SM86) or RTX 20-series (Turing / SM75). The full offline benchmark was run on a 3080 Ti and development validation on a 3070; RTX 20 was confirmed working on a 2080 Ti, whose generated image for the same inputs is bit-identical to the 3080 Ti's; performance is not yet measured.
 - Driver: an NVIDIA driver with the NGX / NVAPI / CUDA interfaces; tested on 591.86 and 610.74. The cubins need roughly R580+; older drivers fall back to PTX automatically (one extra JIT on the first frame only).
 - No CUDA Toolkit and no Python.
 
@@ -54,7 +74,7 @@ The same height at different widths is similar (it tracks output pixel count). T
 5. Upgrade: exit the game and overwrite `version.dll`; `dlssg_sm86.ini` usually needs no change.
 6. Uninstall: overwrite `version.dll` with the backed-up original (or delete it) and delete `dlssg_sm86.ini`.
 
-The factory `dlssg_sm86.ini` keeps only two decisive switches: `[FrameGeneration] Optimized` (`1` uses the optimized kernels, output bit-identical to stock; `0` uses stock numerics) and `[FrameGeneration] MaxGeneratedFrames` (`5` is 6X, `3` is 4X; the actual count is requested by the game and clamped to the runtime's ceiling). Every other diagnostic/compatibility knob takes a safe default and is omitted; the full list is in [`docs/INSTALL.md`](docs/INSTALL.md).
+The factory `dlssg_sm86.ini` keeps only two decisive switches: `[FrameGeneration] Optimized` (optimization level `0`–`3`: `0` stock kernels, no acceleration; `1` every acceleration, image bit-identical to the official one, factory default; `2`/`3` lossy but faster) and `[FrameGeneration] MaxGeneratedFrames` (factory `3` = 4X; `5` = 6X on the 310.9 build only; the actual count is requested by the game and clamped to the runtime's ceiling). Every other diagnostic/compatibility knob takes a safe default and is omitted; the full list is in [`docs/INSTALL.en.md`](docs/INSTALL.en.md).
 
 ## Antivirus & signing
 
@@ -64,7 +84,7 @@ The release proxy DLLs (`version.dll`, `winmm.dll`, and each proxy in `alternati
 
 RTX 3080 Ti, driver 591.86, SM86, measured 2026-09-13. The unit is GPU milliseconds for the whole generation group per real frame, shared preprocessing included; 4 rounds × 256 groups each, median of the per-round medians, configs interleaved within a round to share thermal drift. The table is the 310.9 build, common 16:9 resolutions: stock kernels (`Optimized=0`) versus optimized kernels (`Optimized=1`). Reduction is `(stock − optimized) / stock` on un-rounded data.
 
-This table measures frame generation's GPU compute cost; it is not an in-game FPS gain — how to estimate displayed FPS from it is in the next section. Only lifecycle and tooling changes were made after this measurement (kernel caching and re-binding, capture/replay, logging, INI simplification); the optimized kernel set itself is unchanged (the same 63 variants + image patches + cross-kernel fusions), so these numbers apply to this release.
+This table measures frame generation's GPU compute cost; it is not an in-game FPS gain — how to estimate displayed FPS from it is in the next section. The optimized kernel set itself is unchanged since this measurement (the same 63 variants + image patches + cross-kernel fusions); 0.3.2 only swaps the images of the 26 kernels new in the 310.9 build, which measured another 0–8% faster on the same card, so these numbers are conservative for this release.
 
 | Resolution | Multiplier | Stock (ms) | Optimized (ms) | Reduction |
 |---|---|---|---|---|
@@ -129,7 +149,7 @@ Black Myth: Wukong, Cyberpunk 2077, and FH6 run 4X normally in testing; Resonanc
 - Logs go to `dlssg_sm86\logs\` in the game directory (`loader_<PID>.jsonl` / `backend_<PID>.jsonl`). `[Logging] Level=1` (default) records errors only; use `2` or `3` when investigating.
 - If frame generation does nothing, check `backend_*.jsonl` for an `install` line with `route active=true`; if it is absent, the driver/runtime usually did not match — the reason is logged and the factory path is used.
 - This release optimizes frame generation's GPU compute cost; do not read the offline time reduction as an in-game FPS gain — the real frame-rate change depends on the game and where the bottleneck is.
-- All INI keys, log fields, and capture/replay are in [`docs/INSTALL.md`](docs/INSTALL.md) and [`docs/CAPTURE.md`](docs/CAPTURE.md).
+- All INI keys, log fields, and capture/replay are in [`docs/INSTALL.en.md`](docs/INSTALL.en.md) and [`docs/CAPTURE.md`](docs/CAPTURE.md).
 
 ## SM75 source & credits
 

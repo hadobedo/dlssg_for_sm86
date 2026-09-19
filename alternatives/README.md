@@ -1,34 +1,28 @@
-# 备用代理 DLL（alternatives/）
+# 渲染路径代理 DLL（alternatives/）
 
-代理 DLL 靠"游戏会加载一个和它同名的系统 DLL"来进入进程。默认的 `version.dll` 放在发布根目录，是首选。如果目标游戏不导入 `version.dll`，就从本目录挑一个游戏确实会加载的名字，放到渲染 EXE 旁边。
+代理 DLL 靠"游戏会加载一个和它同名的系统 DLL"来进入进程。**发布包根目录已经放了四个工具类代理**（`version.dll`、`winmm.dll`、`dbghelp.dll`、`dinput8.dll`），安装时把根目录的文件**全部**复制到渲染 EXE 旁即可，**不需要挑**：
 
-**任何时候只启用一个代理。** 六个名字内嵌的运行库、后端和 `dlssg_sm86.ini` 完全相同，区别只在于文件名和转发的目标系统 DLL。每个代理都会把自己全部导出转发给 `C:\Windows\System32\` 里的同名真实 DLL，只拦截 `nvngx_dlssg.dll` 的加载——所以换名字不改变行为。
+- 哪个先被游戏加载，哪个就是本 mod（日志里 `configuration.proxies.active`）；
+- 其余几个自动进入待机（`standby`），只把自己的导出原样转发给 `C:\Windows\System32\` 里的同名真实 DLL，不装任何钩子、不读 INI、不写日志；
+- 因此同目录放多个代理是**正常**的，不会互相打架，也不会重复安装帧生成。
 
-## 工具类代理（最安全，优先用）
+只有当**这四个都没有被游戏加载**时，才需要考虑本目录里的两个渲染路径代理。
 
-这些 DLL 不在 D3D12 渲染热路径上，转发开销可以忽略：
+## 本目录的两个代理（可用，但风险更高）
 
-| 名字 | 放置位置 | 说明 |
-|---|---|---|
-| `version.dll` | 发布根目录 | 首选。绝大多数游戏都会加载 `version.dll`。 |
-| `alternatives/winmm.dll` | EXE 旁 | 第二选择。多媒体计时 API，几乎所有游戏都导入。 |
-| `alternatives/dbghelp.dll` | EXE 旁 | 崩溃/符号处理库。游戏或反作弊常加载。 |
-| `alternatives/dinput8.dll` | EXE 旁 | DirectInput8。老一些的输入栈会加载。 |
-
-## 渲染路径代理（可用，但风险更高）
-
-`dxgi.dll` 和 `d3d12.dll` 是 D3D12 渲染管线本身的入口，游戏每帧都密集调用它们，而且加载顺序敏感（游戏可能在我们的代理就位之前就已按系统路径解析了真实 DLL）。转发是完整的，功能正确，但只有在 `version.dll` / `winmm.dll` 都无法被目标加载时才建议使用：
+`dxgi.dll` 和 `d3d12.dll` 是 D3D12 渲染管线本身的入口，游戏每帧都密集调用它们，而且加载顺序敏感（游戏可能在我们的代理就位之前就已按系统路径解析了真实 DLL）。转发是完整的、功能正确，但它们在渲染热路径上，所以不随根目录一起发，需要时再手动复制：
 
 | 名字 | 放置位置 | 说明 |
 |---|---|---|
-| `alternatives/dxgi.dll` | EXE 旁 | 仅当上面几个都不行时使用。 |
+| `alternatives/dxgi.dll` | EXE 旁 | 仅当根目录四个都没被加载时使用。 |
 | `alternatives/d3d12.dll` | EXE 旁 | 同上；与 `dxgi.dll` 二选一，不要同时放。 |
+
+用完之后建议删掉，改回根目录那四个。
 
 ## 使用步骤
 
-1. 从上表选一个名字，把对应 DLL 复制到渲染 EXE 所在目录（`version.dll` 用根目录那份，其余用 `alternatives/` 里的那份）。
-2. 把 `dlssg_sm86.ini` 复制到同一目录。
-3. 确认同目录没有第二个本项目的代理 DLL。
-4. 启动游戏。日志（`dlssg_sm86\logs\loader_*.jsonl`）里出现 `runtime_redirect` 即代理已生效。
+1. 先按发布 `README.md` 的常规步骤，把发布包**根目录的所有文件**（四个代理 + `dlssg_sm86.ini`）复制到渲染 EXE 目录。
+2. 启动游戏，看日志 `dlssg_sm86\logs\loader_*.jsonl`：出现 `runtime_redirect` 即代理已生效，`configuration` 记录里的 `proxies` 写明了哪个是 active、哪些在待机（需要 `[Logging] Level=2` 才能看到）。
+3. 只有一条 `configuration`/`runtime_redirect` 都没有时，才把本目录的 `dxgi.dll` 或 `d3d12.dll`（**只放一个**）也复制过去再试。
 
-签名与信任见 `docs/SIGNING.md`。完整安装说明见根目录 `README.md`（即 `docs/INSTALL.md`）。
+签名与信任见 `docs/SIGNING.md`。完整安装说明见根目录 `README.md`，全部 INI 键见 `docs/INSTALL.md`。
