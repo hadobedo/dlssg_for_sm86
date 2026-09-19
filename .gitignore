@@ -2,3 +2,5 @@ linux/out/
 upstream-files/
 dist/
 release-notes.md
+__pycache__/
+*.pyc

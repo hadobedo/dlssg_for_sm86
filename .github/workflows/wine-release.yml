@@ -1,23 +1,37 @@
-# Builds the Wine/Proton compatibility shim and publishes a release with the
-# upstream runtime. On demand only: nothing is pulled from upstream and no
-# release is cut until this workflow is run. See linux/LINUX.md.
+# Builds the Wine/Proton compatibility shim and publishes a release that pairs
+# it with the unmodified upstream runtime.
 #
-# Run it: Actions -> "Wine/Proton release" -> Run workflow, or
-#   gh workflow run wine-release.yml -R <owner>/dlssg_for_sm86 -f ref=main
+# Two ways in:
+#   * automatically, on a schedule: it polls upstream for a new release and,
+#     when the runtime payload or the shim sources changed, builds and
+#     publishes without any human input;
+#   * on demand: Actions -> "Wine/Proton release" -> Run workflow, or
+#       gh workflow run wine-release.yml -R <owner>/dlssg_for_sm86
 #
 # One-time setup in a fresh fork:
 #   1. Actions tab -> "I understand my workflows, go ahead and enable them".
+#      GitHub disables workflows (and in particular scheduled ones) in forks
+#      until this is done.
 #   2. Settings -> Actions -> General -> Workflow permissions -> "Read and write
-#      permissions" (the workflow pushes the release and may update main).
-#   3. Run it once with "draft" left on, inspect the artifact, then uncheck it.
+#      permissions" (the workflow pushes the release and updates main).
+#   3. Either let the schedule run, or run it once by hand to inspect a bundle.
+#
+# The schedule is only a trigger. Whether a release is actually cut is decided
+# from hashes: an identical upstream payload plus identical shim sources means
+# no release, so README-only upstream commits produce no churn.
 name: Wine/Proton release
 
 on:
+  schedule:
+    # Every 6 hours, at :17. GitHub may delay scheduled runs under load.
+    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
       ref:
-        description: Upstream ref to build from (branch, tag like 0.3.0, or commit)
-        default: main
+        description: >-
+          Upstream ref to build from (branch, tag like 0.3.4, or commit).
+          "latest-release" means the newest upstream GitHub release.
+        default: latest-release
         type: string
       sync_fork:
         description: Merge upstream main into this fork's main first
@@ -26,7 +40,7 @@ on:
       draft:
         description: Create the release as a draft (nothing is published)
         type: boolean
-        default: true
+        default: false
       force:
         description: Release even if the upstream payload and shim sources are unchanged
         type: boolean
@@ -58,20 +72,72 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Resolve what to build
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_REF: ${{ inputs.ref }}
+          IN_SYNC: ${{ inputs.sync_fork }}
+          IN_DRAFT: ${{ inputs.draft }}
+          IN_FORCE: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            ref=${IN_REF:-latest-release}
+            sync=$IN_SYNC draft=$IN_DRAFT force=$IN_FORCE
+          else
+            # Scheduled poll: newest upstream release, publish, never force.
+            ref=latest-release sync=true draft=false force=false
+          fi
+
+          if [ "$ref" = "latest-release" ]; then
+            # Prefer the newest published GitHub release (the API skips drafts
+            # and prereleases); fall back to the highest version tag if it is
+            # unavailable. Both paths are validated, because a failing `gh api`
+            # can put its error JSON on stdout.
+            latest=""
+            if api_out=$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null); then
+              latest=$(printf '%s' "$api_out" | grep -E '^v?[0-9]+(\.[0-9]+)+$' | head -n1 || true)
+            fi
+            if [ -z "$latest" ]; then
+              latest=$(git ls-remote --tags --refs --sort=-v:refname "$UPSTREAM_URL" \
+                | awk '{print $2}' | sed 's#^refs/tags/##' \
+                | grep -E '^v?[0-9]+(\.[0-9]+)+$' | head -n1 || true)
+            fi
+            [ -n "$latest" ] || { echo "error: cannot determine the latest upstream release" >&2; exit 1; }
+            ref=$latest
+          fi
+
+          {
+            echo "ref=$ref"
+            echo "sync_fork=$sync"
+            echo "draft=$draft"
+            echo "force=$force"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "### trigger"
+            echo
+            echo "| event | upstream ref | sync fork | draft | force |"
+            echo "|---|---|---|---|---|"
+            echo "| \`$EVENT\` | \`$ref\` | $sync | $draft | $force |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
       - name: Fetch the upstream ref and extract its payload
         id: upstream
         env:
-          REF: ${{ inputs.ref }}
+          REF: ${{ steps.resolve.outputs.ref }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Lets README.md win over upstream's, per .gitattributes.
           git config merge.ours.driver true
-          git remote add upstream "$UPSTREAM_URL"
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null \
+            || git remote set-url upstream "$UPSTREAM_URL"
 
           git fetch --no-tags upstream "$REF"
-          sha=$(git rev-parse FETCH_HEAD)
+          sha=$(git rev-parse 'FETCH_HEAD^{commit}')
           echo "sha=$sha" >>"$GITHUB_OUTPUT"
 
           rm -rf upstream-files
@@ -85,7 +151,7 @@ jobs:
           echo "payload: $payload" >>"$GITHUB_STEP_SUMMARY"
 
       - name: Sync this fork with upstream main
-        if: inputs.sync_fork
+        if: steps.resolve.outputs.sync_fork == 'true'
         run: |
           set -euo pipefail
           git fetch --no-tags upstream main
@@ -101,7 +167,7 @@ jobs:
         env:
           UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
           PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
-          FORCE: ${{ inputs.force }}
+          FORCE: ${{ steps.resolve.outputs.force }}
         run: |
           set -euo pipefail
           read_state() { jq -r "$1 // empty" linux/state.json 2>/dev/null || true; }
@@ -115,7 +181,7 @@ jobs:
           src=$(sha256sum linux/version_shim.c linux/version_shim.def | sha256sum | cut -d' ' -f1)
 
           # Upstream's version, from the first line of its English README
-          # ("# DLSSG for SM86 (proxy) - 0.3.0 Version").
+          # ("# DLSSG for SM86 (proxy) - 0.3.4 Version").
           version=$(head -n1 upstream-files/README.en.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
           if [ -z "$version" ]; then
             version=$(git describe --tags --abbrev=0 "$UPSTREAM_SHA" | sed 's/^v//')
@@ -177,9 +243,22 @@ jobs:
 
       - name: Wine smoke test
         if: steps.decide.outputs.build == 'true'
+        id: smoke
         env:
           PROXY: upstream-files/version.dll
-        run: ./linux/smoke-test.sh
+        run: |
+          set -euo pipefail
+          log=$(mktemp)
+          # pipefail makes the script's exit code the pipeline's.
+          ./linux/smoke-test.sh 2>&1 | tee "$log"
+          needs=$(sed -n 's/^SMOKE_NEEDS_SHIM=//p' "$log" | tail -n1)
+          [ -n "$needs" ] || { echo "error: smoke test did not report SMOKE_NEEDS_SHIM" >&2; exit 1; }
+          echo "needs_shim=$needs" >>"$GITHUB_OUTPUT"
+          if [ "$needs" = "yes" ]; then
+            echo "shim: **required** -- this upstream proxy aborts under Wine without it" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "shim: **optional** -- this upstream proxy initializes under Wine without it" >>"$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Package release bundle
         if: steps.decide.outputs.build == 'true'
@@ -226,19 +305,28 @@ jobs:
           SHA: ${{ steps.upstream.outputs.sha }}
           PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
           SHIM_SRC: ${{ steps.decide.outputs.shim_source_sha256 }}
-          REF: ${{ inputs.ref }}
-          DRAFT: ${{ inputs.draft }}
+          NEEDS_SHIM: ${{ steps.smoke.outputs.needs_shim }}
+          REF: ${{ steps.resolve.outputs.ref }}
+          DRAFT: ${{ steps.resolve.outputs.draft }}
         run: |
           set -euo pipefail
           dir="dlssg-sm86-wine-$VERSION"
 
+          if [ "$NEEDS_SHIM" = "yes" ]; then
+            shim_note="**Required** - this upstream proxy aborts with c0000142 under Wine without it."
+          else
+            shim_note="**Optional** - this upstream proxy initializes under Wine on its own; the shim is bundled and verified, but installing it is not required."
+          fi
+
           # linux/release-notes.template.md holds the wording, so the markdown
           # (and its backticks) never goes through shell quoting.
-          sed -e "s|@UPSTREAM_REPO@|$UPSTREAM_REPO|g" \
+          sed -e "s|@REPO@|$GITHUB_REPOSITORY|g" \
+              -e "s|@UPSTREAM_REPO@|$UPSTREAM_REPO|g" \
               -e "s|@REF@|$REF|g" \
               -e "s|@SHA7@|${SHA:0:7}|g" \
               -e "s|@SHA@|$SHA|g" \
               -e "s|@VERSION@|$VERSION|g" \
+              -e "s|@SHIM_NOTE@|$shim_note|g" \
               -e "s|@PAYLOAD@|$PAYLOAD_SHA|g" \
               -e "s|@SHIM_SRC@|$SHIM_SRC|g" \
               linux/release-notes.template.md >release-notes.md
@@ -255,11 +343,12 @@ jobs:
         env:
           TAG: ${{ steps.decide.outputs.tag }}
           VERSION: ${{ steps.decide.outputs.version }}
-          REF: ${{ inputs.ref }}
+          REF: ${{ steps.resolve.outputs.ref }}
           SHA: ${{ steps.upstream.outputs.sha }}
           PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
           REVISION: ${{ steps.decide.outputs.revision }}
           SRC: ${{ steps.decide.outputs.shim_source_sha256 }}
+          NEEDS_SHIM: ${{ steps.smoke.outputs.needs_shim }}
         run: |
           set -euo pipefail
           jq -n \
@@ -270,15 +359,45 @@ jobs:
             --arg payload "$PAYLOAD_SHA" \
             --arg tag "$TAG" \
             --arg src "$SRC" \
+            --arg needs_shim "$NEEDS_SHIM" \
             --argjson revision "$REVISION" \
             --arg shim_sha256 "$(sha256sum linux/out/version.dll | cut -d' ' -f1)" \
             --arg released_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{upstream_repo: $repo, upstream_ref: $ref, upstream_sha: $sha,
               upstream_version: $version, payload_sha256: $payload, revision: $revision,
               tag: $tag, shim_source_sha256: $src, shim_sha256: $shim_sha256,
-              released_at: $released_at}' \
+              shim_required: $needs_shim, released_at: $released_at}' \
             >linux/state.json
           cat linux/state.json
           git add linux/state.json
           git commit -m "ci: release $TAG (upstream ${SHA:0:7})"
+          git push origin main
+
+      - name: Record scheduled check
+        # GitHub disables scheduled workflows after 60 days without repository
+        # activity, so an idle fork would silently stop noticing upstream
+        # releases. Refresh a timestamp at most once a week to keep the poll
+        # alive; skipped when this run already pushed a release commit.
+        if: >-
+          always() && github.event_name == 'schedule'
+          && steps.decide.outputs.build != 'true'
+          && steps.resolve.outputs.ref != ''
+        env:
+          REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          set -euo pipefail
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          prev=$(jq -r '.pushed_at // empty' linux/heartbeat.json 2>/dev/null || true)
+          if [ -n "$prev" ]; then
+            age=$(( $(date -u +%s) - $(date -u -d "$prev" +%s) ))
+            if [ "$age" -lt 604800 ]; then
+              echo "heartbeat is fresh ($prev, ${age}s ago); nothing to push"
+              exit 0
+            fi
+          fi
+          jq -n --arg checked "$now" --arg tag "$REF" \
+            '{checked_at: $checked, upstream_ref: $tag, pushed_at: $checked}' \
+            >linux/heartbeat.json
+          git add linux/heartbeat.json
+          git commit -m "ci: heartbeat $now (upstream $REF)"
           git push origin main

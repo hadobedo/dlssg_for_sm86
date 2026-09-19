@@ -1,7 +1,8 @@
 # Running this mod on Linux (Wine / Proton)
 
 This fork packages the upstream mod together with the compatibility fix that makes it
-initialize under Wine/Proton, plus the CI that builds and verifies the result. See
+initialize under Wine/Proton, plus the CI that builds and verifies the result and polls
+upstream for new releases. See
 [`../README.md`](https://github.com/hadobedo/dlssg_for_sm86/blob/main/README.md) for the
 project overview.
 
@@ -11,13 +12,14 @@ Windows installation — lives upstream and applies unchanged:
 
 ## The problem
 
-Install the mod's `version.dll` in a Wine/Proton prefix and the game dies at startup. The
-proxy is a *forwarder*: it re-exports the real Windows `version.dll` API and passes calls
-through to the system `version.dll`. Its `DllMain` verifies that **every** export it
-forwards can be resolved on that system DLL, and one of them —
-`GetFileVersionInfoByHandle` — does not exist in any Wine build (checked across CachyOS
-Proton, GE-Proton, Valve Proton 8/9/10/Experimental, upstream WineHQ and a staging-tkg
-build). `GetProcAddress` returns NULL, `DllMain` returns FALSE, and the loader reports:
+With upstream **0.3.0 through 0.3.3**, installing the mod's `version.dll` in a Wine/Proton
+prefix made the game die at startup. The proxy is a *forwarder*: it re-exports the real
+Windows `version.dll` API and passes calls through to the system `version.dll`. Its `DllMain`
+verified that **every** export it forwards could be resolved on that system DLL, and one of
+them — `GetFileVersionInfoByHandle` — does not exist in any Wine build (checked across
+CachyOS Proton, GE-Proton, Valve Proton 8/9/10/Experimental, upstream WineHQ and a
+staging-tkg build). `GetProcAddress` returned NULL, `DllMain` returned FALSE, and the loader
+reported:
 
 ```
 Loaded ...\bin\x64\VERSION.dll ... native
@@ -26,9 +28,14 @@ err:module:loader_init "VERSION.dll" failed to initialize, aborting
 Initializing dlls for ...\<Game>.exe failed, status c0000142
 ```
 
-`c0000142` is `STATUS_DLL_INIT_FAILED`. No `dlssg_sm86/logs` directory is ever created,
-because the proxy aborts before its own logger opens. Switching Proton versions does not
+`c0000142` is `STATUS_DLL_INIT_FAILED`. No `dlssg_sm86/logs` directory was ever created,
+because the proxy aborted before its own logger opened. Switching Proton versions did not
 help: it is a gap in Wine, not in a particular Proton build.
+
+**Upstream 0.3.4 fixed this** — its proxy initializes under Wine without any shim. The shim
+is therefore required only for 0.3.0–0.3.3, and is verified harmless on 0.3.4+, so every
+bundle still ships it. CI measures which case applies per release and records it as
+`shim_required` in `state.json`; the release notes state it too.
 
 ## The fix
 
@@ -37,14 +44,15 @@ help: it is a gap in Wine, not in a particular Proton build.
 
 * the 16 exports Wine does implement are forwarded to Wine's real implementation, which the
   installer keeps beside the shim as `version_orig.dll`;
-* `GetFileVersionInfoByHandle` is added as a stub returning FALSE. The proxy only checks that
-  the export *exists*, so the stub is all that is needed to get past the check.
+* `GetFileVersionInfoByHandle` is added as a stub returning FALSE. The proxy of 0.3.0–0.3.3
+  only checks that the export *exists*, so the stub is all that is needed to get past the
+  check.
 
-The DLL is linked with `-nostdlib`, so it imports nothing but `KERNEL32` and does not depend
-on any CRT/UCRT DLL existing in the prefix.
-
-Nothing outside the one game prefix is touched, and two file deletions undo it
-(`install.sh --uninstall`, or restore `version_orig.dll`).
+This fixes the proxy's initialization; it does not add frame generation. The DLL is linked
+with `-nostdlib`, so it imports nothing but `KERNEL32` and does not depend on any CRT/UCRT
+DLL existing in the prefix. The shim only ever runs inside the one prefix it is installed
+into, and two file deletions undo it (`install.sh --uninstall`, or restore
+`version_orig.dll`).
 
 ## Install
 
@@ -70,9 +78,13 @@ With the game closed:
 
 `--prefix` is the folder that contains `drive_c`. `--game-dir` (optional) copies the proxy
 DLL and the INI next to the rendering executable, backing up anything it would overwrite.
+The two destinations are different files with different jobs: `game-dir/version.dll` is the
+mod and is what actually enables frame generation; `system32/version.dll` is the shim that
+lets the proxy initialize. **On 0.3.4+ the `system32` replacement is optional** (upstream
+fixed the check) and `--no-shim` skips it entirely; without that flag `install.sh` performs
+it either way, which CI verifies is harmless.
 
-Then set the DLL override for that prefix — **once** — or Wine's builtin `version.dll` wins
-and the proxy is never loaded:
+Then set the DLL override for that prefix — **once**:
 
 ```
 protontricks <AppID> winecfg      ->  Libraries: version = native,builtin
@@ -88,6 +100,11 @@ WINEPREFIX=<prefix> wine reg add 'HKCU\Software\Wine\DllOverrides' \
 
 Stop the prefix first: a running `wineserver` holds the registry in memory and can overwrite
 a manual edit when it exits.
+
+Recent Wine already prefers an application-directory `version.dll` over its builtin for a
+non-KnownDLL like this one, so the proxy often loads without the override; setting it anyway
+is recommended, since it removes any dependence on the build's default and is what the older
+Wine/Proton builds where the abort was diagnosed need.
 
 ### Manual install (same four steps)
 
@@ -131,11 +148,12 @@ use.
 
 **The `alternatives/` proxies (`winmm`, `dbghelp`, `dinput8`, `dxgi`, `d3d12`).** Upstream
 ships them for games that do not import `version.dll`. They are not included in these
-releases, because they fail on Linux for exactly the same reason: measured under Wine,
-each one aborts with `err=1114` at load, since it demands exports that its Wine counterpart
-(`winmm`, `dbghelp`, …) does not provide. Fixing them would mean a separate shim per proxy
-name, covering 6 to 252 exports each, and none of that has been tested. If your game does
-not import `version.dll`, this fork cannot help today.
+releases, and the shim only covers `version.dll`. The 0.3.0–0.3.3 copies abort under Wine
+with error 1114 at load, because each demands exports its Wine counterpart does not provide.
+Upstream 0.3.4 relaxed the same check the `version.dll` proxy used, so as of 0.3.4 they load
+(measured with a headless `LoadLibrary` under Wine 11.17) — but this fork verifies nothing
+beyond that for them. If your game does not import `version.dll`, take them from upstream's
+release.
 
 **Frame generation itself.** The shim only gets the proxy past `DllMain`. Driver
 negotiation, the CUDA bridge and the actual generated frames depend on your Proton build,
@@ -151,26 +169,31 @@ python3 linux/verify-exports.py version.dll linux/out/version.dll
 ```
 
 `smoke-test.sh` runs headlessly, with no GPU or game: it creates a throwaway Wine prefix,
-copies the upstream proxy into a "game directory", and checks that it fails with error 1114
-without the shim and loads plus forwards correctly with it. That is the same check CI runs
-before publishing a release. Point `PROXY=` at another copy of the proxy to test a different
-build.
+copies the upstream proxy into a "game directory", and checks that the proxy either fails
+with error 1114 without the shim (0.3.0–0.3.3) or initializes on its own (0.3.4+), and that
+it loads plus forwards correctly with the shim installed in either case. It ends with
+`SMOKE_NEEDS_SHIM=yes|no`, which is the check CI runs before publishing a release. Point
+`PROXY=` at another copy of the proxy to test a different build.
 
 ## CI and releases
 
 [`.github/workflows/wine-release.yml`](https://github.com/hadobedo/dlssg_for_sm86/blob/main/.github/workflows/wine-release.yml)
-runs on demand only (`workflow_dispatch`) — nothing is pulled from upstream and no release is
-created until it is started. Given a `ref` (default: upstream `main`), it:
+polls upstream **every 6 hours** and publishes a release when the runtime changed; it also
+runs on demand (`workflow_dispatch`, default `ref=latest-release`). Each run:
 
-1. fetches that upstream ref and extracts `version.dll` + `dlssg_sm86.ini` from it;
+1. resolves the newest upstream GitHub release (or the pinned `ref`) and extracts
+   `version.dll` + `dlssg_sm86.ini` from it;
 2. optionally merges upstream `main` into this fork's `main`;
 3. builds the shim, verifies it covers every export the upstream proxy requires, and runs the
-   Wine smoke test;
-4. publishes a release tagged `wine-<upstream version>` (`wine-0.3.0`, or `wine-0.3.0-r2`
+   Wine smoke test, recording whether the shim is required for that version;
+4. publishes a release tagged `wine-<upstream version>` (`wine-0.3.4`, or `wine-0.3.4-r2`
    when the payload or shim changed without a version bump);
-5. records what it built — upstream ref, commit, payload hash, shim hashes — in
-   `linux/state.json`.
+5. records what it built — upstream ref, commit, payload hash, shim hashes, shim requirement —
+   in `linux/state.json`.
 
 Runs are idempotent: if the payload hash and the shim source hash both match the recorded
-state, the build is skipped (use `force` to override). Documentation-only upstream commits
-therefore produce no release churn.
+state, the build is skipped (use `force` to override), so documentation-only upstream commits
+produce no release churn. A scheduled run with nothing to build refreshes
+`linux/heartbeat.json` at most once a week: GitHub disables scheduled workflows after 60 days
+without repository activity, and the heartbeat prevents an idle fork from silently going deaf
+to upstream releases.

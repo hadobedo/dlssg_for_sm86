@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Fail if the shim no longer covers every export the proxy requires.
 
-The mod's version.dll refuses to initialize unless every export it looks for
-resolves on the system version.dll -- which, under Wine, is our shim. So the
-shim's export set must always be a superset of the proxy's.
+The mod's version.dll refuses to initialize unless every version.dll API export
+it looks for resolves on the system version.dll -- which, under Wine, is our
+shim. So the shim's export set must always be a superset of the proxy's *API*
+exports.
+
+Between 0.3.3 and 0.3.4 the proxy also started publishing two exports of its
+own, `DlssgProxy_Name` and `DlssgProxy_Role`, so other parts of the mod can
+recognize which proxy variant is loaded. Those are identity markers on the
+proxy itself, never looked up on the system version.dll, and the shim must not
+provide them (a stock Wine version.dll does not either; 0.3.4 initializes fine
+against it). They are excluded from the required set below.
 
 Usage: verify-exports.py <proxy.dll> <shim.dll>
 
@@ -12,6 +20,14 @@ Run by CI on every release; needs python3-pefile (or `pip install pefile`).
 import sys
 
 import pefile
+
+# Prefix of the proxy's self-identification exports.
+IDENTITY_EXPORT_PREFIX = "DlssgProxy_"
+
+
+def required_exports(proxy_exports):
+    """The proxy exports the *system* version.dll has to provide."""
+    return {name for name in proxy_exports if not name.startswith(IDENTITY_EXPORT_PREFIX)}
 
 
 def exports(path):
@@ -34,9 +50,13 @@ def main(argv):
         return 2
 
     proxy, shim = argv[1], argv[2]
-    required, provided = exports(proxy), exports(shim)
-    print(f"{proxy}: {len(required)} exports")
+    proxy_exports, provided = exports(proxy), exports(shim)
+    required = required_exports(proxy_exports)
+    identity = sorted(proxy_exports - required)
+    print(f"{proxy}: {len(proxy_exports)} exports ({len(required)} required from the system DLL)")
     print(f"{shim}: {len(provided)} exports")
+    if identity:
+        print(f"note: proxy identity exports, not required from the system DLL: {', '.join(identity)}")
 
     missing = sorted(required - provided)
     if missing:

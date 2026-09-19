@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Install (or remove) the Wine/Proton compatibility shim for this mod.
 #
-#   ./install.sh --prefix <wine-prefix> [--game-dir <dir>] [--uninstall]
+#   ./install.sh --prefix <wine-prefix> [--game-dir <dir>] [--no-shim] [--uninstall]
 #
 #   --prefix     Wine/Proton prefix directory: the folder that contains
 #                drive_c, e.g.
 #                ~/.steam/steam/steamapps/compatdata/<AppID>/pfx
 #   --game-dir   Optional: copy the mod's version.dll and dlssg_sm86.ini into
 #                the game's rendering-EXE folder.
+#   --no-shim    Skip the system32 replacement. Upstream 0.3.4+ initializes
+#                under Wine without it; it is still required for 0.3.0-0.3.3.
 #   --uninstall  Put the original version.dll back and delete the shim.
 #
 # The script only touches files; it never runs wine. The one thing it cannot do
@@ -19,14 +21,19 @@
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-prefix='' game_dir='' uninstall=false
+prefix='' game_dir='' uninstall=false no_shim=false
 
-usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() {
+    # Print the leading comment block (everything after the shebang).
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"
+    exit "${1:-0}"
+}
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --prefix)    prefix=${2:-}; shift 2 ;;
         --game-dir)  game_dir=${2:-}; shift 2 ;;
+        --no-shim)   no_shim=true; shift ;;
         --uninstall) uninstall=true; shift ;;
         -h|--help)   usage 0 ;;
         *) echo "error: unknown argument: $1" >&2; usage 1 ;;
@@ -38,7 +45,6 @@ prefix=${prefix%/}
 [[ -d $prefix/drive_c ]] || { echo "error: $prefix does not look like a Wine prefix (no drive_c)" >&2; exit 1; }
 
 sys32=$prefix/drive_c/windows/system32
-[[ -f $sys32/version.dll ]] || { echo "error: $sys32/version.dll not found" >&2; exit 1; }
 
 if $uninstall; then
     if [[ -f $sys32/version_orig.dll ]]; then
@@ -64,17 +70,23 @@ first_file() { local f; for f in "$@"; do [[ -f $f ]] && { printf '%s' "$f"; ret
 mod_dll=$(first_file "$here/game-dir/version.dll" "$here/../version.dll" "$here/version.dll") \
     || { echo "error: cannot find the mod's version.dll next to $here" >&2; exit 1; }
 mod_dir=$(dirname -- "$mod_dll")
-shim=$(first_file "$here/system32/version.dll" "$here/out/version.dll") \
-    || { echo "error: cannot find the shim; run linux/build.sh first" >&2; exit 1; }
 
-if [[ ! -f $sys32/version_orig.dll ]]; then
-    # Wine's version.dll is often a symlink into the Proton install; -L copies
-    # the real bytes, which is what the shim loads at runtime.
-    cp -L -- "$sys32/version.dll" "$sys32/version_orig.dll"
-    echo "kept Wine's implementation as $sys32/version_orig.dll"
+if $no_shim; then
+    echo "skipping the system32 shim (--no-shim)"
+else
+    [[ -f $sys32/version.dll ]] || { echo "error: $sys32/version.dll not found" >&2; exit 1; }
+    shim=$(first_file "$here/system32/version.dll" "$here/out/version.dll") \
+        || { echo "error: cannot find the shim; run linux/build.sh first" >&2; exit 1; }
+
+    if [[ ! -f $sys32/version_orig.dll ]]; then
+        # Wine's version.dll is often a symlink into the Proton install; -L copies
+        # the real bytes, which is what the shim loads at runtime.
+        cp -L -- "$sys32/version.dll" "$sys32/version_orig.dll"
+        echo "kept Wine's implementation as $sys32/version_orig.dll"
+    fi
+    cp -- "$shim" "$sys32/version.dll"
+    echo "installed the shim as $sys32/version.dll"
 fi
-cp -- "$shim" "$sys32/version.dll"
-echo "installed the shim as $sys32/version.dll"
 
 if [[ -n $game_dir ]]; then
     [[ -d $game_dir ]] || { echo "error: --game-dir $game_dir is not a directory" >&2; exit 1; }
@@ -93,8 +105,8 @@ fi
 
 cat <<EOF
 
-Next: set the DLL override for this prefix (once), or the proxy's builtin
-version.dll wins and frame generation will not load:
+Next: set the DLL override for this prefix (once). Recent Wine already prefers the
+app-directory proxy, but the override removes any dependence on the build's default:
   protontricks <AppID> winecfg     -> Libraries: version = native,builtin
 
 Then start the game and check <render-exe-dir>/dlssg_sm86/logs/ for a
