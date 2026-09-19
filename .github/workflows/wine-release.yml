@@ -5,7 +5,7 @@
 #   * automatically, on a schedule: it polls upstream for a new release and,
 #     when the runtime payload or the shim sources changed, builds and
 #     publishes without any human input;
-#   * on demand: Actions -> "Wine/Proton release" -> Run workflow, or
+#   * on demand: Actions, "Wine/Proton release", Run workflow, or
 #       gh workflow run wine-release.yml -R <owner>/dlssg_for_sm86
 #
 # One-time setup in a fresh fork:
@@ -42,7 +42,7 @@ on:
         type: boolean
         default: false
       force:
-        description: Release even if the upstream payload and shim sources are unchanged
+        description: Release even if the upstream payload and sources are unchanged
         type: boolean
         default: false
 
@@ -57,9 +57,11 @@ env:
   UPSTREAM_REPO: sdli1995/dlssg_for_sm86
   UPSTREAM_URL: https://github.com/sdli1995/dlssg_for_sm86.git
   # The upstream files that end up in the bundle. A change to these (or to the
-  # shim sources) is what makes a release worth cutting; README-only upstream
+  # files below) is what makes a release worth cutting; README-only upstream
   # commits do not.
   PAYLOAD_FILES: version.dll dlssg_sm86.ini
+  # Bump when the bundle layout changes, so the change produces a release.
+  PACKAGING_VERSION: "2"
 
 jobs:
   release:
@@ -172,13 +174,20 @@ jobs:
           set -euo pipefail
           read_state() { jq -r "$1 // empty" linux/state.json 2>/dev/null || true; }
           prev_payload=$(read_state .payload_sha256)
-          prev_src=$(read_state .shim_source_sha256)
+          prev_src=$(read_state .source_sha256)
           prev_version=$(read_state .upstream_version)
           prev_rev=$(read_state .revision)
           prev_rev=${prev_rev:-0}
 
-          # Hash of the shim sources, so shim-only changes also produce a release.
-          src=$(sha256sum linux/version_shim.c linux/version_shim.def | sha256sum | cut -d' ' -f1)
+          # Hash of everything this repo contributes to the bundle: the shim
+          # sources, the installer and the bundle layout version. A change to
+          # any of them makes the release worth rebuilding.
+          src=$(
+            {
+              printf 'packaging %s\n' "$PACKAGING_VERSION"
+              sha256sum linux/version_shim.c linux/version_shim.def linux/install.sh
+            } | sha256sum | cut -d' ' -f1
+          )
 
           # Upstream's version, from the first line of its English README
           # ("# DLSSG for SM86 (proxy) - 0.3.4 Version").
@@ -208,7 +217,7 @@ jobs:
             echo "version=$version"
             echo "revision=$rev"
             echo "tag=$tag"
-            echo "shim_source_sha256=$src"
+            echo "source_sha256=$src"
           } >>"$GITHUB_OUTPUT"
 
           {
@@ -216,8 +225,8 @@ jobs:
             echo
             echo "- upstream: \`$UPSTREAM_SHA\` (version $version)"
             echo "- payload: \`$PAYLOAD_SHA\`"
-            echo "- shim sources: \`$src\`"
-            echo "- building: **$build**"
+            echo "- sources: \`$src\`"
+            echo "- building: $build"
             if [ "$build" = "false" ]; then
               echo
               echo "Nothing changed since the last release; re-run with \`force\` to rebuild anyway."
@@ -255,9 +264,9 @@ jobs:
           [ -n "$needs" ] || { echo "error: smoke test did not report SMOKE_NEEDS_SHIM" >&2; exit 1; }
           echo "needs_shim=$needs" >>"$GITHUB_OUTPUT"
           if [ "$needs" = "yes" ]; then
-            echo "shim: **required** -- this upstream proxy aborts under Wine without it" >>"$GITHUB_STEP_SUMMARY"
+            echo "shim: required (this upstream proxy aborts under Wine without it)" >>"$GITHUB_STEP_SUMMARY"
           else
-            echo "shim: **optional** -- this upstream proxy initializes under Wine without it" >>"$GITHUB_STEP_SUMMARY"
+            echo "shim: optional (this upstream proxy starts under Wine without it)" >>"$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Package release bundle
@@ -269,21 +278,19 @@ jobs:
           set -euo pipefail
           dir="dlssg-sm86-wine-$VERSION"
           rm -rf dist
-          mkdir -p "dist/$dir/game-dir" "dist/$dir/system32" "dist/$dir/shim-source"
+          mkdir -p "dist/$dir/game-dir" "dist/$dir/system32"
 
-          # Unmodified upstream runtime, then our additions.
-          cp upstream-files/version.dll upstream-files/dlssg_sm86.ini "dist/$dir/game-dir/"
-          cp upstream-files/THIRD_PARTY_NOTICES.txt "dist/$dir/"
+          # Upstream's runtime, and its licence notice beside the DLL it covers.
+          cp upstream-files/version.dll upstream-files/dlssg_sm86.ini \
+             upstream-files/THIRD_PARTY_NOTICES.txt "dist/$dir/game-dir/"
           cp linux/out/version.dll "dist/$dir/system32/version.dll"
-          cp linux/version_shim.c linux/version_shim.def linux/build.sh "dist/$dir/shim-source/"
-          cp linux/install.sh linux/LINUX.md README.md "dist/$dir/"
-          chmod +x "dist/$dir/install.sh" "dist/$dir/shim-source/build.sh"
+          cp linux/install.sh "dist/$dir/install.sh"
+          chmod +x "dist/$dir/install.sh"
 
-          # Read/write split: SHA256SUMS is written only after the file list is
-          # captured, so it can never hash itself.
-          ( cd "dist/$dir" && find . -type f ! -name SHA256SUMS -print0 | sort -z \
-              | xargs -0 sha256sum >/tmp/sums )
-          mv /tmp/sums "dist/$dir/SHA256SUMS"
+          # SHA256SUMS is uploaded as its own release asset, so it is written
+          # outside the bundle directory and never lands in the zip.
+          ( cd "dist/$dir" && find . -type f -print0 | sort -z \
+              | xargs -0 sha256sum >../SHA256SUMS )
           ( cd dist && zip -qr "$dir.zip" "$dir" )
 
           {
@@ -293,7 +300,7 @@ jobs:
             ( cd "dist/$dir" && find . -type f | sort )
             echo '```'
             echo
-            cat "dist/$dir/SHA256SUMS"
+            cat "dist/SHA256SUMS"
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Create release
@@ -304,38 +311,36 @@ jobs:
           VERSION: ${{ steps.decide.outputs.version }}
           SHA: ${{ steps.upstream.outputs.sha }}
           PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
-          SHIM_SRC: ${{ steps.decide.outputs.shim_source_sha256 }}
+          SOURCE_SHA: ${{ steps.decide.outputs.source_sha256 }}
           NEEDS_SHIM: ${{ steps.smoke.outputs.needs_shim }}
-          REF: ${{ steps.resolve.outputs.ref }}
           DRAFT: ${{ steps.resolve.outputs.draft }}
         run: |
           set -euo pipefail
           dir="dlssg-sm86-wine-$VERSION"
 
           if [ "$NEEDS_SHIM" = "yes" ]; then
-            shim_note="**Required** - this upstream proxy aborts with c0000142 under Wine without it."
+            shim_note="required (the proxy does not start under Wine without it)"
           else
-            shim_note="**Optional** - this upstream proxy initializes under Wine on its own; the shim is bundled and verified, but installing it is not required."
+            shim_note="optional (the proxy starts under Wine without it)"
           fi
 
           # linux/release-notes.template.md holds the wording, so the markdown
           # (and its backticks) never goes through shell quoting.
           sed -e "s|@REPO@|$GITHUB_REPOSITORY|g" \
               -e "s|@UPSTREAM_REPO@|$UPSTREAM_REPO|g" \
-              -e "s|@REF@|$REF|g" \
               -e "s|@SHA7@|${SHA:0:7}|g" \
               -e "s|@SHA@|$SHA|g" \
               -e "s|@VERSION@|$VERSION|g" \
               -e "s|@SHIM_NOTE@|$shim_note|g" \
               -e "s|@PAYLOAD@|$PAYLOAD_SHA|g" \
-              -e "s|@SHIM_SRC@|$SHIM_SRC|g" \
+              -e "s|@SOURCE_SHA@|$SOURCE_SHA|g" \
               linux/release-notes.template.md >release-notes.md
 
           args=(--title "$TAG" --notes-file release-notes.md --target "$(git rev-parse HEAD)")
           if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
           # --repo is explicit: the `upstream` remote added earlier would
           # otherwise make gh resolve to the upstream repository.
-          gh release create "$TAG" "dist/$dir.zip" "dist/$dir/SHA256SUMS" \
+          gh release create "$TAG" "dist/$dir.zip" "dist/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" "${args[@]}"
 
       - name: Record release state
@@ -347,7 +352,7 @@ jobs:
           SHA: ${{ steps.upstream.outputs.sha }}
           PAYLOAD_SHA: ${{ steps.upstream.outputs.payload_sha256 }}
           REVISION: ${{ steps.decide.outputs.revision }}
-          SRC: ${{ steps.decide.outputs.shim_source_sha256 }}
+          SRC: ${{ steps.decide.outputs.source_sha256 }}
           NEEDS_SHIM: ${{ steps.smoke.outputs.needs_shim }}
         run: |
           set -euo pipefail
@@ -365,7 +370,7 @@ jobs:
             --arg released_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{upstream_repo: $repo, upstream_ref: $ref, upstream_sha: $sha,
               upstream_version: $version, payload_sha256: $payload, revision: $revision,
-              tag: $tag, shim_source_sha256: $src, shim_sha256: $shim_sha256,
+              tag: $tag, source_sha256: $src, shim_sha256: $shim_sha256,
               shim_required: $needs_shim, released_at: $released_at}' \
             >linux/state.json
           cat linux/state.json

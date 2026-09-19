@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 # Install (or remove) the Wine/Proton compatibility shim for this mod.
 #
-#   ./install.sh --prefix <wine-prefix> [--game-dir <dir>] [--no-shim] [--uninstall]
+#   ./install.sh (--appid <id> | --prefix <dir>) [--game-dir <dir>] [--no-shim] [--uninstall]
 #
-#   --prefix     Wine/Proton prefix directory: the folder that contains
-#                drive_c, e.g.
-#                ~/.steam/steam/steamapps/compatdata/<AppID>/pfx
-#   --game-dir   Optional: copy the mod's version.dll and dlssg_sm86.ini into
-#                the game's rendering-EXE folder.
-#   --no-shim    Skip the system32 replacement. Upstream 0.3.4+ initializes
-#                under Wine without it; it is still required for 0.3.0-0.3.3.
+#   --appid      Steam AppID of the game. The prefix is looked up under the usual
+#                Steam and Flatpak locations.
+#   --prefix     Wine/Proton prefix directory instead: the folder that contains
+#                drive_c.
+#   --game-dir   Copy the mod's version.dll and dlssg_sm86.ini into the game's
+#                rendering-EXE folder.
+#   --no-shim    Skip the system32 replacement. Upstream 0.3.4 and later start
+#                without it; it is required for 0.3.0 to 0.3.3.
 #   --uninstall  Put the original version.dll back and delete the shim.
 #
-# The script only touches files; it never runs wine. The one thing it cannot do
-# for you is the DLL override, which has to be set per prefix:
-#   protontricks <AppID> winecfg   ->  Libraries: version = native,builtin
+# The script only touches files and never runs wine. The DLL override has to be
+# set per prefix, and the script cannot do it for you:
+#   protontricks <AppID> winecfg    (set Libraries: version = native,builtin)
 # or, with a wine binary available:
 #   WINEPREFIX=<prefix> wine reg add \
 #     'HKCU\Software\Wine\DllOverrides' /v version /d 'native,builtin' /f
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-prefix='' game_dir='' uninstall=false no_shim=false
+appid='' prefix='' game_dir='' uninstall=false no_shim=false
 
 usage() {
     # Print the leading comment block (everything after the shebang).
@@ -31,6 +32,7 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --appid)     appid=${2:-}; shift 2 ;;
         --prefix)    prefix=${2:-}; shift 2 ;;
         --game-dir)  game_dir=${2:-}; shift 2 ;;
         --no-shim)   no_shim=true; shift ;;
@@ -40,7 +42,37 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n $prefix ]] || { echo "error: --prefix is required" >&2; usage 1; }
+if [[ -n $appid && -n $prefix ]]; then
+    echo "error: pass either --appid or --prefix, not both" >&2
+    exit 1
+fi
+
+if [[ -n $appid ]]; then
+    # The prefix lives under one of these roots, depending on how Steam was installed.
+    roots=(
+        "$HOME/.steam/steam"
+        "$HOME/.steam/debian-installation"
+        "$HOME/.local/share/Steam"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"
+    )
+    for root in "${roots[@]}"; do
+        candidate="$root/steamapps/compatdata/$appid/pfx"
+        if [[ -d $candidate/drive_c ]]; then
+            prefix=$candidate
+            break
+        fi
+    done
+    if [[ -z $prefix ]]; then
+        {
+            echo "error: no prefix found for AppID $appid. Looked under:"
+            printf '  %s\n' "${roots[@]}"
+            echo "Pass the folder that contains drive_c with --prefix instead."
+        } >&2
+        exit 1
+    fi
+fi
+
+[[ -n $prefix ]] || { echo "error: --appid or --prefix is required" >&2; usage 1; }
 prefix=${prefix%/}
 [[ -d $prefix/drive_c ]] || { echo "error: $prefix does not look like a Wine prefix (no drive_c)" >&2; exit 1; }
 
@@ -57,7 +89,7 @@ if $uninstall; then
     cat <<EOF
 
 Remove the DLL override when no other game in this prefix needs it:
-  Libraries: version -> (blank), or delete HKCU\\Software\\Wine\\DllOverrides\\version
+  set Libraries: version to (blank), or delete HKCU\\Software\\Wine\\DllOverrides\\version
 Also delete version.dll and dlssg_sm86.ini from the game folder if you copied them.
 EOF
     exit 0
@@ -106,8 +138,8 @@ fi
 cat <<EOF
 
 Next: set the DLL override for this prefix (once). Recent Wine already prefers the
-app-directory proxy, but the override removes any dependence on the build's default:
-  protontricks <AppID> winecfg     -> Libraries: version = native,builtin
+app-directory proxy, but the override removes any dependence on the build default:
+  protontricks <AppID> winecfg    (set Libraries: version = native,builtin)
 
 Then start the game and check <render-exe-dir>/dlssg_sm86/logs/ for a
 loader_*.jsonl that reports "runtime_redirect".

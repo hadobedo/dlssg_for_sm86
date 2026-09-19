@@ -69,7 +69,7 @@ def main(argv):
         print(
             "\nAdd a forwarder (or a stub returning 0, if Wine does not implement\n"
             "the function) for each name to linux/version_shim.c and "
-            "linux/version_shim.def,\nthen re-run. See linux/LINUX.md.",
+            "linux/version_shim.def,\nthen re-run. See README.md.",
             file=sys.stderr,
         )
         return 1
