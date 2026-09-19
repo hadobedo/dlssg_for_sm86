@@ -4,9 +4,20 @@ Frame generation for RTX 30-series cards, and for RTX 20-series through the SM75
 Linux. This repository packages the mod for Wine and Proton and publishes a zip for each
 upstream release.
 
+## Credits
+
 The mod is [sdli1995/dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86). Its README
 covers supported GPUs, the ini settings, VRAM guidance and Windows installation, and all of
 that applies here.
+
+[tB0nE/dlssg_for_sm86](https://github.com/tB0nE/dlssg_for_sm86) worked out why the mod crashed
+under Wine in [issue #10](https://github.com/sdli1995/dlssg_for_sm86/issues/10) and wrote the
+first shim, which the one here is derived from.
+
+The RTX 20-series / SM75 assets come from
+[Coldwood1026/dlssg_for_sm75](https://github.com/Coldwood1026/dlssg_for_sm75).
+
+Unofficial packaging, not endorsed by the mod's author.
 
 ## What is in the zip
 
@@ -86,9 +97,3 @@ python3 linux/verify-exports.py version.dll linux/out/version.dll
 
 `smoke-test.sh` makes a throwaway Wine prefix and runs the loader check. Point `PROXY=` at
 another copy of the upstream proxy to test a different build.
-
-## Credits
-
-sdli1995 wrote the mod. tB0nE worked out why it crashed under Wine in
-[issue #10](https://github.com/sdli1995/dlssg_for_sm86/issues/10) and wrote the first shim,
-which the one here is derived from. Unofficial packaging, not endorsed by the mod's author.
