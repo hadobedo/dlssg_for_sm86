@@ -4,10 +4,9 @@
   "upstream_sha": "196fcb61ef414992a6bef2d237ff609aab09f0d9",
   "upstream_version": "0.3.4",
   "payload_sha256": "38dfff5c95c2e9c6b214cfc4aad54f5bfd7f4ee993c2fbc744c2861803dfdeb0",
-  "revision": 2,
-  "tag": "wine-0.3.4-r2",
-  "source_sha256": "037fb6f69956bb0a3b75a1736b4af04f8af76674fe7c0e11f541f418eed1906c",
-  "shim_sha256": "7dfc0e12321110930dba54f3022c5e022d9dae14f554c4d7d1d43e14c3ad8ce9",
+  "tag": "proton-0.3.4",
+  "source_sha256": "160ea1733897367afa46bc423aa0ca61ff6e97f8ecde037bba89017ecac04c35",
+  "shim_sha256": "44bdb355eddc3c0305661c87a3613f64a90f48b923e16e634b501a419a6ea8c9",
   "shim_required": "no",
-  "released_at": "2026-09-19T06:30:16Z"
+  "released_at": "2026-09-19T06:37:46Z"
 }
